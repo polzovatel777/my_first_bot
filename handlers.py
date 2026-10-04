@@ -3,6 +3,7 @@ from aiogram import Router, types, F, Bot
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import keyboards as kb
 import database as db
 
@@ -11,7 +12,7 @@ router = Router()
 # 🔴 Твой Telegram USER_ID
 ADMIN_ID = 818535227
 
-# 🟢 Твоя ссылка на Google Apps Script
+# 🟢 Твоя ссылка на Google Apps Script для выгрузки в Google Таблицу
 GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbzQLDGNCvFKvOeYzpW9ZgZx_GpVxdnwPnjXOyXpCOHxP1vFWkJxve1A2OHfTsORGokYlw/exec"
 
 class Form(StatesGroup):
@@ -59,13 +60,24 @@ async def start_form(message: types.Message, state: FSMContext):
 async def process_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
     await state.set_state(Form.phone)
-    await message.answer("Укажите ваш номер телефона для связи:")
+    # Показываем кнопку отправки контакта
+    await message.answer(
+        "Нажмите кнопку ниже, чтобы поделиться контактом, или введите номер вручную:", 
+        reply_markup=kb.get_phone_keyboard()
+    )
 
-@router.message(Form.phone)
+@router.message(Form.phone, F.contact)
+@router.message(Form.phone, F.text)
 async def process_phone(message: types.Message, state: FSMContext):
-    await state.update_data(phone=message.text)
+    # Получаем телефон через кнопку или из введенного текста
+    if message.contact:
+        phone = message.contact.phone_number
+    else:
+        phone = message.text
+
+    await state.update_data(phone=phone)
     await state.set_state(Form.comment)
-    await message.answer("Опишите коротко вашу задачу или вопрос:")
+    await message.answer("Опишите коротко вашу задачу или вопрос:", reply_markup=kb.get_cancel_keyboard())
 
 @router.message(Form.comment)
 async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
@@ -94,7 +106,7 @@ async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
         reply_markup=kb.get_main_keyboard(is_admin=is_admin)
     )
 
-    # 3. Мгновенное уведомление администратору в Telegram
+    # 3. Мгновенное уведомление администратору с инлайн-кнопками статуса
     if ADMIN_ID:
         try:
             username = f"@{message.from_user.username}" if message.from_user.username else "нет username"
@@ -105,9 +117,35 @@ async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
                 f"💬 <b>Комментарий:</b> {comment}\n"
                 f"🔗 <b>Профиль:</b> {username} (ID: {message.from_user.id})"
             )
-            await bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode="HTML")
+            
+            # Инлайн-кнопки управления заявкой прямо из чата
+            status_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ В работу", callback_data="status_work"),
+                    InlineKeyboardButton(text="❌ Отклонить", callback_data="status_cancel")
+                ]
+            ])
+            
+            await bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode="HTML", reply_markup=status_kb)
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
+
+# --- ОБРАБОТКА ИНЛАЙН-КНОПОК СТАТУСА ДЛЯ АДМИНА ---
+
+@router.callback_query(F.data.startswith("status_"))
+async def process_status_change(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("У вас нет доступа.", show_alert=True)
+        return
+
+    status_text = "взята в работу ✅" if callback.data == "status_work" else "отклонена ❌"
+    
+    # Обновляем текст сообщения, убирая кнопки
+    await callback.message.edit_text(
+        f"{callback.message.text}\n\n📌 <b>Статус:</b> Заявка {status_text}",
+        parse_mode="HTML"
+    )
+    await callback.answer(f"Заявка {status_text}")
 
 # --- ИНФОРМАЦИЯ И АДМИНКА ---
 
