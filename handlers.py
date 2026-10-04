@@ -109,7 +109,7 @@ async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
         reply_markup=kb.get_main_keyboard(is_admin=is_admin)
     )
 
-    # 3. Мгновенное уведомление администратору (в callback_data передаём ID клиента для уведомления)
+    # 3. Мгновенное уведомление администратору
     if ADMIN_ID:
         try:
             username = f"@{message.from_user.username}" if message.from_user.username else "нет username"
@@ -121,7 +121,6 @@ async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
                 f"🔗 <b>Профиль:</b> {username} (ID: {client_id})"
             )
             
-            # Инлайн-кнопки с ID клиента в callback_data
             status_kb = InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(text="✅ В работу", callback_data=f"status_work_{client_id}"),
@@ -152,7 +151,7 @@ async def process_status_change(callback: types.CallbackQuery, bot: Bot):
         status_text = "отклонена ❌"
         user_notify_text = "🔴 <b>Обновление по вашей заявке:</b>\nК сожалению, ваша заявка отклонена. Если у вас возникли вопросы, вы можете связаться с нами через контакты."
 
-    # Обновляем текст сообщения админа (убираем кнопки)
+    # Обновляем текст сообщения админа
     await callback.message.edit_text(
         f"{callback.message.text}\n\n📌 <b>Статус:</b> Заявка {status_text}",
         parse_mode="HTML"
@@ -210,7 +209,7 @@ async def execute_broadcast(callback: types.CallbackQuery, state: FSMContext, bo
     text_to_send = data.get("broadcast_text")
     await state.clear()
 
-    await callback.message.edit_text("⏳ Начинаю рассылку...")
+    await callback.message.edit_text("⏳ <b>Начинаю рассылку...</b>", parse_mode="HTML")
 
     users = db.get_all_users()
     success_count = 0
@@ -221,29 +220,41 @@ async def execute_broadcast(callback: types.CallbackQuery, state: FSMContext, bo
         try:
             await bot.send_message(chat_id=user_id, text=text_to_send, parse_mode="HTML")
             success_count += 1
-        except Exception:
+        except Exception as e:
+            print(f"Ошибка рассылки пользователю {user_id}: {e}")
             failed_count += 1
 
-    await callback.message.answer(
-        f"✅ <b>Рассылка завершена!</b>\n\n"
-        f"📨 Успешно доставлено: {success_count}\n"
-        f"🚫 Ошибок (заблокировали бота): {failed_count}",
+    # Редактируем то же самое сообщение, подтверждая завершение
+    await callback.message.edit_text(
+        f"🎉 <b>РАССЫЛКА ЗАВЕРШЕНА!</b>\n\n"
+        f"📨 Успешно доставлено: <b>{success_count}</b>\n"
+        f"🚫 Ошибок (заблокировали бота): <b>{failed_count}</b>",
         parse_mode="HTML"
     )
     await callback.answer()
 
 # --- ИНФОРМАЦИЯ И АДМИНКА ---
 
-@router.message(F.text == "ℹ️️ О компании")
+# Фильтры поиска текста кнопки с любыми видами иконок
+@router.message(F.text.contains("О компании"))
 async def info_handler(message: types.Message):
-    await message.answer("Мы помогаем бизнесу автоматизировать прием заявок и работу с клиентами.")
+    await message.answer(
+        "ℹ️ <b>О компании</b>\n\n"
+        "Мы помогаем бизнесу автоматизировать прием заявок, работу с клиентами и выгрузку данных в Google Таблицы 24/7.",
+        parse_mode="HTML"
+    )
 
-@router.message(F.text == "📞 Контакты")
+@router.message(F.text.contains("Контакты"))
 async def contacts_handler(message: types.Message):
-    await message.answer("Телефон: +7 (999) 999-99-99\nTelegram: @il_overdrive")
+    await message.answer(
+        "📞 <b>Наши контакты:</b>\n\n"
+        "Телефон: +7 (999) 999-99-99\n"
+        "Telegram для связи: @il_overdrive",
+        parse_mode="HTML"
+    )
 
 @router.message(Command("admin"))
-@router.message(F.text == "⚙️ Админ-панель")
+@router.message(F.text.contains("Админ-панель"))
 async def admin_panel(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         await message.answer("⛔ У вас нет доступа к этой команде.")
@@ -258,7 +269,7 @@ async def admin_panel(message: types.Message):
     for req in requests:
         req_id, name, phone, comment, created_at = req
         text += (
-            f"<b>#️{req_id}</b> | {created_at}\n"
+            f"<b>#{req_id}</b> | {created_at}\n"
             f"👤 {name} | 📞 {phone}\n"
             f"💬 {comment}\n"
             f"-------------------------------\n"
