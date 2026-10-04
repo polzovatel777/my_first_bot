@@ -1,4 +1,4 @@
-from aiogram import Router, types, F
+from aiogram import Router, types, F, Bot
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
@@ -7,7 +7,9 @@ import database as db
 
 router = Router()
 
-# Состояния формы заявки
+# 🔴 УКАЖИ ЗДЕСЬ СВОЙ TELEGRAM USER_ID (для доступа к админке и получения уведомлений)
+ADMIN_ID = 818535227  # Поменяй на свой ID!
+
 class Form(StatesGroup):
     name = State()
     phone = State()
@@ -16,18 +18,23 @@ class Form(StatesGroup):
 @router.message(CommandStart())
 async def cmd_start(message: types.Message):
     db.add_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+    is_admin = (message.from_user.id == ADMIN_ID)
+    
     await message.answer(
-        f"Здравствуйте, <b>{message.from_user.first_name}</b>! 👋\n\nДобро пожаловать в сервис.",
+        f"Здравствуйте, <b>{message.from_user.first_name}</b>! 👋\n\n"
+        f"Добро пожаловать. Мы принимаем и обрабатываем ваши заявки 24/7.\n"
+        f"Выберите нужное действие в меню ниже:",
         parse_mode="HTML",
-        reply_markup=kb.get_main_keyboard()
+        reply_markup=kb.get_main_keyboard(is_admin=is_admin)
     )
 
 @router.message(F.text == "❌ Отмена")
 async def cancel_handler(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("Действие отменено.", reply_markup=kb.get_main_keyboard())
+    is_admin = (message.from_user.id == ADMIN_ID)
+    await message.answer("Действие отменено.", reply_markup=kb.get_main_keyboard(is_admin=is_admin))
 
-# --- Пошаговая форма (FSM) ---
+# --- ПОШАГОВЫЙ ОПРОС КЛИЕНТА (FSM) ---
 
 @router.message(F.text == "📝 Оставить заявку")
 async def start_form(message: types.Message, state: FSMContext):
@@ -38,30 +45,79 @@ async def start_form(message: types.Message, state: FSMContext):
 async def process_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
     await state.set_state(Form.phone)
-    await message.answer("Введите ваш номер телефона:")
+    await message.answer("Укажите ваш номер телефона для связи:")
 
 @router.message(Form.phone)
 async def process_phone(message: types.Message, state: FSMContext):
     await state.update_data(phone=message.text)
     await state.set_state(Form.comment)
-    await message.answer("Напишите краткое описание вашего вопроса или задачи:")
+    await message.answer("Опишите коротко вашу задачу или вопрос:")
 
 @router.message(Form.comment)
-async def process_comment(message: types.Message, state: FSMContext):
+async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
     user_data = await state.get_data()
-    db.add_request(message.from_user.id, user_data['name'], user_data['phone'], message.text)
+    name = user_data['name']
+    phone = user_data['phone']
+    comment = message.text
     
+    # 1. Сохраняем в БД
+    db.add_request(message.from_user.id, name, phone, comment)
     await state.clear()
+    
+    is_admin = (message.from_user.id == ADMIN_ID)
     await message.answer(
-        "✅ <b>Спасибо! Ваша заявка принята.</b>\nМы свяжемся с вами в ближайшее время.",
+        "✅ <b>Спасибо! Ваша заявка успешно принята.</b>\nМенеджер свяжется с вами в ближайшее время.",
         parse_mode="HTML",
-        reply_markup=kb.get_main_keyboard()
+        reply_markup=kb.get_main_keyboard(is_admin=is_admin)
     )
 
-@router.message(F.text == "ℹ️ О сервисе")
+    # 2. УВЕДОМЛЯЕМ ВЛАДЕЛЬЦА (АДМИНИСТРАТОРА)
+    if ADMIN_ID and ADMIN_ID != 123456789:
+        try:
+            username = f"@{message.from_user.username}" if message.from_user.username else "нет username"
+            admin_text = (
+                f"🚨 <b>НОВАЯ ЗАЯВКА!</b>\n\n"
+                f"👤 <b>Имя:</b> {name}\n"
+                f"📞 <b>Телефон:</b> {phone}\n"
+                f"💬 <b>Комментарий:</b> {comment}\n"
+                f"🔗 <b>Профиль:</b> {username} (ID: {message.from_user.id})"
+            )
+            await bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode="HTML")
+        except Exception as e:
+            print(f"Ошибка отправки админу: {e}")
+
+# --- ИНФОРМАЦИЯ И АДМИНКА ---
+
+@router.message(F.text == "ℹ️ О компании")
 async def info_handler(message: types.Message):
-    await message.answer("Мы предоставляем профессиональные решения на Python и aiogram 3.")
+    await message.answer("Мы помогаем бизнесу автоматизировать прием заявок и работу с клиентами.")
 
 @router.message(F.text == "📞 Контакты")
 async def contacts_handler(message: types.Message):
-    await message.answer("Поддержка: @il_overdrive\nПн-Пт с 9:00 до 18:00")
+    await message.answer("Телефон: +7 (999) 000-00-00\nTelegram: @admin")
+
+# --- ВЫДАЧА СПИСКА ЗАЯВОК АДМИНИСТРАТОРУ ---
+
+@router.message(Command("admin"))
+@router.message(F.text == "⚙️ Админ-панель")
+async def admin_panel(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ У вас нет доступа к этой команде.")
+        return
+
+    requests = db.get_all_requests(limit=10)
+    if not requests:
+        await message.answer("📭 Заявок пока нет.")
+        return
+
+    text = "📋 <b>Последние 10 заявок:</b>\n\n"
+    for req in requests:
+        req_id, name, phone, comment, created_at = req
+        text += (
+            f"<b>#️{req_id}</b> | {created_at}\n"
+            f"👤 {name} | 📞 {phone}\n"
+            f"💬 {comment}\n"
+            f"-------------------------------\n"
+        )
+
+    await message.answer(text, parse_mode="HTML")
