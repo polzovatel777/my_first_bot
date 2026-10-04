@@ -94,7 +94,7 @@ async def info_handler(message: types.Message):
 
 @router.message(F.text == "📞 Контакты")
 async def contacts_handler(message: types.Message):
-    await message.answer("Телефон: +7 (999) 000-00-00\nTelegram: @admin")
+    await message.answer("Телефон: +7 (999) 999-99-99\nTelegram: @il_overdrive")
 
 # --- ВЫДАЧА СПИСКА ЗАЯВОК АДМИНИСТРАТОРУ ---
 
