@@ -64,4 +64,4 @@ async def info_handler(message: types.Message):
 
 @router.message(F.text == "📞 Контакты")
 async def contacts_handler(message: types.Message):
-    await message.answer("Поддержка: @your_username\nПн-Пт с 9:00 до 18:00")
+    await message.answer("Поддержка: @il_overdrive\nПн-Пт с 9:00 до 18:00")
