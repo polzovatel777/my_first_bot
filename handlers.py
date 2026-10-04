@@ -20,6 +20,10 @@ class Form(StatesGroup):
     phone = State()
     comment = State()
 
+class BroadcastForm(StatesGroup):
+    text = State()
+    confirm = State()
+
 async def send_to_google_sheet(data: dict):
     """Отправка заявки в Google Таблицу"""
     if not GOOGLE_SHEET_URL:
@@ -60,7 +64,6 @@ async def start_form(message: types.Message, state: FSMContext):
 async def process_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
     await state.set_state(Form.phone)
-    # Показываем кнопку отправки контакта
     await message.answer(
         "Нажмите кнопку ниже, чтобы поделиться контактом, или введите номер вручную:", 
         reply_markup=kb.get_phone_keyboard()
@@ -69,7 +72,6 @@ async def process_name(message: types.Message, state: FSMContext):
 @router.message(Form.phone, F.contact)
 @router.message(Form.phone, F.text)
 async def process_phone(message: types.Message, state: FSMContext):
-    # Получаем телефон через кнопку или из введенного текста
     if message.contact:
         phone = message.contact.phone_number
     else:
@@ -85,28 +87,29 @@ async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
     name = user_data['name']
     phone = user_data['phone']
     comment = message.text
+    client_id = message.from_user.id
     
     # 1. Сохраняем в локальную БД SQLite
-    db.add_request(message.from_user.id, name, phone, comment)
+    db.add_request(client_id, name, phone, comment)
 
     # 2. Автоматическая выгрузка в Google Таблицу
     await send_to_google_sheet({
         "name": name,
         "phone": phone,
         "comment": comment,
-        "user_id": message.from_user.id
+        "user_id": client_id
     })
     
     await state.clear()
     
-    is_admin = (message.from_user.id == ADMIN_ID)
+    is_admin = (client_id == ADMIN_ID)
     await message.answer(
         "✅ <b>Спасибо! Ваша заявка успешно принята.</b>\nМенеджер свяжется с вами в ближайшее время.",
         parse_mode="HTML",
         reply_markup=kb.get_main_keyboard(is_admin=is_admin)
     )
 
-    # 3. Мгновенное уведомление администратору с инлайн-кнопками статуса
+    # 3. Мгновенное уведомление администратору (в callback_data передаём ID клиента для уведомления)
     if ADMIN_ID:
         try:
             username = f"@{message.from_user.username}" if message.from_user.username else "нет username"
@@ -115,14 +118,14 @@ async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
                 f"👤 <b>Имя:</b> {name}\n"
                 f"📞 <b>Телефон:</b> {phone}\n"
                 f"💬 <b>Комментарий:</b> {comment}\n"
-                f"🔗 <b>Профиль:</b> {username} (ID: {message.from_user.id})"
+                f"🔗 <b>Профиль:</b> {username} (ID: {client_id})"
             )
             
-            # Инлайн-кнопки управления заявкой прямо из чата
+            # Инлайн-кнопки с ID клиента в callback_data
             status_kb = InlineKeyboardMarkup(inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="✅ В работу", callback_data="status_work"),
-                    InlineKeyboardButton(text="❌ Отклонить", callback_data="status_cancel")
+                    InlineKeyboardButton(text="✅ В работу", callback_data=f"status_work_{client_id}"),
+                    InlineKeyboardButton(text="❌ Отклонить", callback_data=f"status_cancel_{client_id}")
                 ]
             ])
             
@@ -130,34 +133,114 @@ async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
 
-# --- ОБРАБОТКА ИНЛАЙН-КНОПОК СТАТУСА ДЛЯ АДМИНА ---
+# --- ОБРАБОТКА СТАТУСОВ И УВЕДОМЛЕНИЕ КЛИЕНТА ---
 
 @router.callback_query(F.data.startswith("status_"))
-async def process_status_change(callback: types.CallbackQuery):
+async def process_status_change(callback: types.CallbackQuery, bot: Bot):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("У вас нет доступа.", show_alert=True)
         return
 
-    status_text = "взята в работу ✅" if callback.data == "status_work" else "отклонена ❌"
-    
-    # Обновляем текст сообщения, убирая кнопки
+    data_parts = callback.data.split("_")
+    action_type = data_parts[1]
+    target_user_id = int(data_parts[2]) if len(data_parts) > 2 else None
+
+    if action_type == "work":
+        status_text = "взята в работу ✅"
+        user_notify_text = "🟡 <b>Обновление по вашей заявке:</b>\nВаша заявка взята в работу! Менеджер уже занимается вашим вопросом."
+    else:
+        status_text = "отклонена ❌"
+        user_notify_text = "🔴 <b>Обновление по вашей заявке:</b>\nК сожалению, ваша заявка отклонена. Если у вас возникли вопросы, вы можете связаться с нами через контакты."
+
+    # Обновляем текст сообщения админа (убираем кнопки)
     await callback.message.edit_text(
         f"{callback.message.text}\n\n📌 <b>Статус:</b> Заявка {status_text}",
         parse_mode="HTML"
     )
     await callback.answer(f"Заявка {status_text}")
 
+    # Уведомляем клиента
+    if target_user_id:
+        try:
+            await bot.send_message(chat_id=target_user_id, text=user_notify_text, parse_mode="HTML")
+        except Exception as e:
+            print(f"Не удалось отправить уведомление пользователю {target_user_id}: {e}")
+
+# --- МОДУЛЬ РАССЫЛКИ (BROADCAST) ---
+
+@router.message(Command("broadcast"))
+async def start_broadcast(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ У вас нет доступа к этой команде.")
+        return
+
+    await state.set_state(BroadcastForm.text)
+    await message.answer("📢 <b>Введите текст для рассылки всем пользователям:</b>", parse_mode="HTML", reply_markup=kb.get_cancel_keyboard())
+
+@router.message(BroadcastForm.text)
+async def process_broadcast_text(message: types.Message, state: FSMContext):
+    await state.update_data(broadcast_text=message.text)
+    await state.set_state(BroadcastForm.confirm)
+
+    confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🚀 Отправить рассылку", callback_data="confirm_broadcast"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_broadcast")
+        ]
+    ])
+
+    await message.answer(
+        f"<b>Проверьте текст рассылки:</b>\n\n{message.text}\n\n<i>Отправить сообщение всем пользователям?</i>",
+        parse_mode="HTML",
+        reply_markup=confirm_kb
+    )
+
+@router.callback_query(F.data.in_(["confirm_broadcast", "cancel_broadcast"]))
+async def execute_broadcast(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    if callback.from_user.id != ADMIN_ID:
+        return
+
+    if callback.data == "cancel_broadcast":
+        await state.clear()
+        await callback.message.edit_text("❌ Рассылка отменена.")
+        await callback.answer()
+        return
+
+    data = await state.get_data()
+    text_to_send = data.get("broadcast_text")
+    await state.clear()
+
+    await callback.message.edit_text("⏳ Начинаю рассылку...")
+
+    users = db.get_all_users()
+    success_count = 0
+    failed_count = 0
+
+    for user in users:
+        user_id = user[0]
+        try:
+            await bot.send_message(chat_id=user_id, text=text_to_send, parse_mode="HTML")
+            success_count += 1
+        except Exception:
+            failed_count += 1
+
+    await callback.message.answer(
+        f"✅ <b>Рассылка завершена!</b>\n\n"
+        f"📨 Успешно доставлено: {success_count}\n"
+        f"🚫 Ошибок (заблокировали бота): {failed_count}",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
 # --- ИНФОРМАЦИЯ И АДМИНКА ---
 
-@router.message(F.text == "ℹ️ О компании")
+@router.message(F.text == "ℹ️️ О компании")
 async def info_handler(message: types.Message):
     await message.answer("Мы помогаем бизнесу автоматизировать прием заявок и работу с клиентами.")
 
 @router.message(F.text == "📞 Контакты")
 async def contacts_handler(message: types.Message):
     await message.answer("Телефон: +7 (999) 999-99-99\nTelegram: @il_overdrive")
-
-# --- ВЫДАЧА СПИСКА ЗАЯВОК АДМИНИСТРАТОРУ ---
 
 @router.message(Command("admin"))
 @router.message(F.text == "⚙️ Админ-панель")
