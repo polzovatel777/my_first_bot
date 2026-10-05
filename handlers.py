@@ -4,7 +4,7 @@ from aiogram import Router, types, F, Bot
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 import keyboards as kb
 import database as db
@@ -35,23 +35,6 @@ async def send_to_google_sheet(data: dict):
             await session.post(GOOGLE_SHEET_URL, json=data)
     except Exception as e:
         print(f"Ошибка отправки в Google Таблицу: {e}")
-
-async def update_google_sheet_status(user_id: int, status_text: str):
-    """Обновление статуса заявки в Google Таблице"""
-    if not GOOGLE_SHEET_URL:
-        return
-    try:
-        async with aiohttp.ClientSession() as session:
-            await session.post(
-                GOOGLE_SHEET_URL, 
-                json={
-                    "action": "update_status",
-                    "user_id": user_id,
-                    "status": status_text
-                }
-            )
-    except Exception as e:
-        print(f"Ошибка обновления статуса в Google Таблице: {e}")
 
 # --- ФОНОВАЯ ЗАДАЧА РАССЫЛКИ ---
 
@@ -223,11 +206,9 @@ async def process_status_change(callback: types.CallbackQuery, bot: Bot):
 
     if action_type == "work":
         status_text = "взята в работу ✅"
-        sheet_status = "🟡 В работе"
         user_notify_text = "🟡 <b>Обновление по вашей заявке:</b>\nВаша заявка взята в работу! Менеджер уже занимается вашим вопросом."
     else:
         status_text = "отклонена ❌"
-        sheet_status = "🔴 Отклонена"
         user_notify_text = "🔴 <b>Обновление по вашей заявке:</b>\nК сожалению, ваша заявка отклонена. Если у вас возникли вопросы, вы можете связаться с нами через контакты."
 
     await callback.message.edit_text(
@@ -237,10 +218,6 @@ async def process_status_change(callback: types.CallbackQuery, bot: Bot):
     await callback.answer(f"Заявка {status_text}")
 
     if target_user_id:
-        # 1. Обновляем статус в Google Таблице в фоновом режиме
-        asyncio.create_task(update_google_sheet_status(target_user_id, sheet_status))
-        
-        # 2. Уведомляем клиента в Telegram
         try:
             await bot.send_message(chat_id=target_user_id, text=user_notify_text, parse_mode="HTML")
         except Exception as e:
@@ -305,31 +282,6 @@ async def execute_broadcast(callback: types.CallbackQuery, state: FSMContext, bo
     asyncio.create_task(run_broadcast_task(bot, text_to_send, callback.from_user.id))
 
 # --- ИНФОРМАЦИЯ И АДМИНКА ---
-
-@router.message(Command("export"))
-@router.message(F.text.contains("Скачать базу"))
-async def export_users_handler(message: types.Message):
-    """Выгрузка файла со всеми пользователями"""
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("⛔ У вас нет доступа к этой команде.")
-        return
-
-    msg = await message.answer("⏳ Готовлю файл с базой пользователей...")
-
-    try:
-        if hasattr(db, 'export_users_csv'):
-            csv_file = db.export_users_csv()
-            document = BufferedInputFile(csv_file.getvalue(), filename="users_base.csv")
-
-            await message.answer_document(
-                document=document,
-                caption="📊 <b>Выгрузка базы пользователей</b>\n\nФайл готов и отформатирован для открытия в Excel."
-            )
-            await msg.delete()
-        else:
-            await msg.edit_text("⚠️ Функция export_users_csv еще не добавлена в database.py")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка при формировании файла: {e}")
 
 @router.message(F.text.contains("О компании"))
 async def info_handler(message: types.Message):
