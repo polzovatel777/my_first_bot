@@ -92,10 +92,19 @@ async def run_broadcast_task(bot: Bot, text_to_send: str, admin_id: int):
         reply_markup=kb.get_main_keyboard(is_admin=True)
     )
 
-# --- КОМАНДЫ И ОБРАБОТЧИКИ ---
+# --- ГЛОБАЛЬНАЯ ОТМЕНА / ПЕРЕХОД ПО КНОПКАМ МЕНЮ ---
+
+@router.message(F.text == "❌ Отмена")
+async def cancel_handler(message: types.Message, state: FSMContext):
+    await state.clear()
+    is_admin = (message.from_user.id == ADMIN_ID)
+    await message.answer("Действие отменено.", reply_markup=kb.get_main_keyboard(is_admin=is_admin))
+
+# --- КОМАНДЫ И ИНФОРМАЦИОННЫЕ КНОПКИ ---
 
 @router.message(CommandStart())
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
     db.add_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
     is_admin = (message.from_user.id == ADMIN_ID)
     
@@ -107,11 +116,24 @@ async def cmd_start(message: types.Message):
         reply_markup=kb.get_main_keyboard(is_admin=is_admin)
     )
 
-@router.message(F.text == "❌ Отмена")
-async def cancel_handler(message: types.Message, state: FSMContext):
+@router.message(F.text == "ℹ️ О компании")
+async def info_handler(message: types.Message, state: FSMContext):
     await state.clear()
-    is_admin = (message.from_user.id == ADMIN_ID)
-    await message.answer("Действие отменено.", reply_markup=kb.get_main_keyboard(is_admin=is_admin))
+    await message.answer(
+        "ℹ️ <b>О компании</b>\n\n"
+        "Мы помогаем бизнесу автоматизировать прием заявок, работу с клиентами и выгрузку данных в Google Таблицы 24/7.",
+        parse_mode="HTML"
+    )
+
+@router.message(F.text == "📞 Контакты")
+async def contacts_handler(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "📞 <b>Наши контакты:</b>\n\n"
+        "Телефон: +7 (999) 999-99-99\n"
+        "Telegram для связи: @il_overdrive",
+        parse_mode="HTML"
+    )
 
 # --- ПОШАГОВЫЙ ОПРОС КЛИЕНТА (FSM) ---
 
@@ -132,6 +154,15 @@ async def process_name(message: types.Message, state: FSMContext):
 @router.message(Form.phone, F.contact)
 @router.message(Form.phone, F.text)
 async def process_phone(message: types.Message, state: FSMContext):
+    # Если пользователь ввел стандартную команду или кнопку меню вместо телефона
+    if message.text in ["ℹ️ О компании", "📞 Контакты", "📝 Оставить заявку", "📢 Сделать рассылку", "⚙️ Админ-панель"]:
+        await state.clear()
+        if message.text == "ℹ️ О компании":
+            await info_handler(message, state)
+        elif message.text == "📞 Контакты":
+            await contacts_handler(message, state)
+        return
+
     if message.contact:
         phone = message.contact.phone_number
     else:
@@ -144,8 +175,8 @@ async def process_phone(message: types.Message, state: FSMContext):
 @router.message(Form.comment)
 async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
     user_data = await state.get_data()
-    name = user_data['name']
-    phone = user_data['phone']
+    name = user_data.get('name', 'Не указано')
+    phone = user_data.get('phone', 'Не указано')
     comment = message.text
     client_id = message.from_user.id
     
@@ -226,7 +257,7 @@ async def process_status_change(callback: types.CallbackQuery, bot: Bot):
 # --- МОДУЛЬ РАССЫЛКИ (ПО КНОПКЕ "📢 Сделать рассылку") ---
 
 @router.message(Command("broadcast"))
-@router.message(F.text.contains("Сделать рассылку"))
+@router.message(F.text == "📢 Сделать рассылку")
 async def start_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         await message.answer("⛔ У вас нет доступа к этой функции.")
@@ -274,35 +305,17 @@ async def execute_broadcast(callback: types.CallbackQuery, state: FSMContext, bo
     text_to_send = data.get("broadcast_text")
     await state.clear()
 
-    # Изменяем сообщение на «Начинаю рассылку...»
     await callback.message.edit_text("⏳ <b>Начинаю рассылку...</b>", parse_mode="HTML")
     await callback.answer()
 
-    # Запускаем фоновую задачу для отправки
     asyncio.create_task(run_broadcast_task(bot, text_to_send, callback.from_user.id))
 
-# --- ИНФОРМАЦИЯ И АДМИНКА ---
-
-@router.message(F.text.contains("О компании"))
-async def info_handler(message: types.Message):
-    await message.answer(
-        "ℹ️ <b>О компании</b>\n\n"
-        "Мы помогаем бизнесу автоматизировать прием заявок, работу с клиентами и выгрузку данных в Google Таблицы 24/7.",
-        parse_mode="HTML"
-    )
-
-@router.message(F.text.contains("Контакты"))
-async def contacts_handler(message: types.Message):
-    await message.answer(
-        "📞 <b>Наши контакты:</b>\n\n"
-        "Телефон: +7 (999) 999-99-99\n"
-        "Telegram для связи: @il_overdrive",
-        parse_mode="HTML"
-    )
+# --- АДМИН-ПАНЕЛЬ ---
 
 @router.message(Command("admin"))
-@router.message(F.text.contains("Админ-панель"))
-async def admin_panel(message: types.Message):
+@router.message(F.text == "⚙️ Админ-панель")
+async def admin_panel(message: types.Message, state: FSMContext):
+    await state.clear()
     if message.from_user.id != ADMIN_ID:
         await message.answer("⛔ У вас нет доступа к этой команде.")
         return
