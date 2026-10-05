@@ -93,11 +93,11 @@ async def run_broadcast_task(bot: Bot, text_to_send: str, admin_id: int):
 
 # --- ГЛОБАЛЬНАЯ ОТМЕНА И МЕНЮ ---
 
-@router.message(F.text == "❌ Отмена")
+@router.message(F.text.in_(["❌ Отмена", "❌ Отменить заполнение"]))
 async def cancel_handler(message: types.Message, state: FSMContext):
     await state.clear()
     is_admin = (message.from_user.id == ADMIN_ID)
-    await message.answer("Действие отменено.", reply_markup=kb.get_main_keyboard(is_admin=is_admin))
+    await message.answer("✨ Действие отменено.", reply_markup=kb.get_main_keyboard(is_admin=is_admin))
 
 @router.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -113,31 +113,33 @@ async def cmd_start(message: types.Message, state: FSMContext):
         reply_markup=kb.get_main_keyboard(is_admin=is_admin)
     )
 
-@router.message(F.text == "ℹ️ О компании")
+@router.message(F.text.in_(["ℹ️ О компании", "🏢 О компании"]))
 async def info_handler(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "ℹ️ <b>О компании</b>\n\n"
-        "Мы помогаем бизнесу автоматизировать прием заявок, работу с клиентами и выгрузку данных в Google Таблицы 24/7.",
+        "🏢 <b>О компании</b>\n\n"
+        "Мы создаем технологичные решения для автоматизации бизнеса 24/7.\n"
+        "Ваши заявки мгновенно попадают к специалистам и в реестр Google Таблиц.",
         parse_mode="HTML"
     )
 
-@router.message(F.text == "📞 Контакты")
+@router.message(F.text.in_(["📞 Контакты", "💎 Контакты"]))
 async def contacts_handler(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "📞 <b>Наши контакты:</b>\n\n"
-        "Телефон: +7 (999) 999-99-99\n"
-        "Telegram для связи: @il_overdrive",
+        "💎 <b>Наши контакты:</b>\n\n"
+        "📲 <b>Телефон:</b> +7 (999) 999-99-99\n"
+        "💬 <b>Telegram:</b> @il_overdrive\n"
+        "⏰ <b>Режим работы:</b> Круглосуточно",
         parse_mode="HTML"
     )
 
 # --- ПОШАГОВЫЙ ОПРОС КЛИЕНТА (FSM) С ВАЛИДАЦИЕЙ ---
 
-@router.message(F.text == "📝 Оставить заявку")
+@router.message(F.text.in_(["📝 Оставить заявку", "🚀 Оставить заявку"]))
 async def start_form(message: types.Message, state: FSMContext):
     await state.set_state(Form.name)
-    await message.answer("Как к вам обращаться? (Введите имя)", reply_markup=kb.get_cancel_keyboard())
+    await message.answer("👋 <b>Как к вам обращаться?</b> (Введите ваше имя)", parse_mode="HTML", reply_markup=kb.get_cancel_keyboard())
 
 @router.message(Form.name)
 async def process_name(message: types.Message, state: FSMContext):
@@ -151,11 +153,19 @@ async def process_name(message: types.Message, state: FSMContext):
 @router.message(Form.phone, F.contact)
 @router.message(Form.phone, F.text)
 async def process_phone(message: types.Message, state: FSMContext):
-    if message.text in ["ℹ️ О компании", "📞 Контакты", "📝 Оставить заявку", "📢 Сделать рассылку", "⚙️ Админ-панель"]:
+    # ПЕРЕХВАТ НАЖАТИЙ КНОПОК МЕНЮ ВО ВРЕМЯ ВВОДА ТЕЛЕФОНА
+    menu_buttons = [
+        "ℹ️ О компании", "🏢 О компании",
+        "📞 Контакты", "💎 Контакты",
+        "📝 Оставить заявку", "🚀 Оставить заявку",
+        "📢 Сделать рассылку", "⚙️ Админ-панель"
+    ]
+    
+    if message.text in menu_buttons:
         await state.clear()
-        if message.text == "ℹ️ О компании":
+        if message.text in ["ℹ️ О компании", "🏢 О компании"]:
             await info_handler(message, state)
-        elif message.text == "📞 Контакты":
+        elif message.text in ["📞 Контакты", "💎 Контакты"]:
             await contacts_handler(message, state)
         return
 
@@ -177,7 +187,7 @@ async def process_phone(message: types.Message, state: FSMContext):
 
     await state.update_data(phone=phone)
     await state.set_state(Form.comment)
-    await message.answer("Опишите коротко вашу задачу или вопрос:", reply_markup=kb.get_cancel_keyboard())
+    await message.answer("💬 <b>Опишите коротко вашу задачу или вопрос:</b>", parse_mode="HTML", reply_markup=kb.get_cancel_keyboard())
 
 @router.message(Form.comment)
 async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
