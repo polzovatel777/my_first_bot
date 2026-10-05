@@ -54,8 +54,9 @@ def get_all_users():
 def add_request(user_id: int, name: str, phone: str, comment: str):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    # Исправлено: добавлены все 4 знака вопроса (?, ?, ?, ?)
     cursor.execute(
-        "INSERT INTO requests (user_id, name, phone, comment) VALUES (?, ?, ?)",
+        "INSERT INTO requests (user_id, name, phone, comment) VALUES (?, ?, ?, ?)",
         (user_id, name, phone, comment)
     )
     conn.commit()
