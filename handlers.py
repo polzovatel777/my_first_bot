@@ -1,20 +1,20 @@
 import asyncio
 import aiohttp
+import re
+import os
+import pandas as pd
 from aiogram import Router, types, F, Bot
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 import keyboards as kb
 import database as db
 
 router = Router()
 
-# 🔴 Твой Telegram USER_ID
 ADMIN_ID = 818535227
-
-# 🟢 Ссылка на Google Apps Script
 GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbzQLDGNCvFKvOeYzpW9ZgZx_GpVxdnwPnjXOyXpCOHxP1vFWkJxve1A2OHfTsORGokYlw/exec"
 
 class Form(StatesGroup):
@@ -27,7 +27,7 @@ class BroadcastForm(StatesGroup):
     confirm = State()
 
 async def send_to_google_sheet(data: dict):
-    """Отправка заявки в Google Таблицу"""
+    """Отправка данных в Google Таблицу"""
     if not GOOGLE_SHEET_URL:
         return
     try:
@@ -39,7 +39,6 @@ async def send_to_google_sheet(data: dict):
 # --- ФОНОВАЯ ЗАДАЧА РАССЫЛКИ ---
 
 async def run_broadcast_task(bot: Bot, text_to_send: str, admin_id: int):
-    """Выполняется в фоновом режиме, не блокируя основной поток бота"""
     try:
         users = db.get_all_users()
     except Exception as e:
@@ -67,7 +66,7 @@ async def run_broadcast_task(bot: Bot, text_to_send: str, admin_id: int):
         try:
             await bot.send_message(chat_id=user_id, text=text_to_send, parse_mode="HTML")
             success_count += 1
-            await asyncio.sleep(0.05)  # Защита от Flood limits
+            await asyncio.sleep(0.05)
         except TelegramRetryAfter as e:
             await asyncio.sleep(e.retry_after)
             try:
@@ -92,15 +91,13 @@ async def run_broadcast_task(bot: Bot, text_to_send: str, admin_id: int):
         reply_markup=kb.get_main_keyboard(is_admin=True)
     )
 
-# --- ГЛОБАЛЬНАЯ ОТМЕНА / ПЕРЕХОД ПО КНОПКАМ МЕНЮ ---
+# --- ГЛОБАЛЬНАЯ ОТМЕНА И МЕНЮ ---
 
 @router.message(F.text == "❌ Отмена")
 async def cancel_handler(message: types.Message, state: FSMContext):
     await state.clear()
     is_admin = (message.from_user.id == ADMIN_ID)
     await message.answer("Действие отменено.", reply_markup=kb.get_main_keyboard(is_admin=is_admin))
-
-# --- КОМАНДЫ И ИНФОРМАЦИОННЫЕ КНОПКИ ---
 
 @router.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -135,7 +132,7 @@ async def contacts_handler(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
 
-# --- ПОШАГОВЫЙ ОПРОС КЛИЕНТА (FSM) ---
+# --- ПОШАГОВЫЙ ОПРОС КЛИЕНТА (FSM) С ВАЛИДАЦИЕЙ ---
 
 @router.message(F.text == "📝 Оставить заявку")
 async def start_form(message: types.Message, state: FSMContext):
@@ -154,7 +151,6 @@ async def process_name(message: types.Message, state: FSMContext):
 @router.message(Form.phone, F.contact)
 @router.message(Form.phone, F.text)
 async def process_phone(message: types.Message, state: FSMContext):
-    # Если пользователь ввел стандартную команду или кнопку меню вместо телефона
     if message.text in ["ℹ️ О компании", "📞 Контакты", "📝 Оставить заявку", "📢 Сделать рассылку", "⚙️ Админ-панель"]:
         await state.clear()
         if message.text == "ℹ️ О компании":
@@ -166,7 +162,18 @@ async def process_phone(message: types.Message, state: FSMContext):
     if message.contact:
         phone = message.contact.phone_number
     else:
-        phone = message.text
+        raw_phone = message.text
+        # ВАЛИДАЦИЯ ТЕЛЕФОНА: оставляем только цифры
+        digits = re.sub(r"\D", "", raw_phone)
+        if not (10 <= len(digits) <= 12):
+            await message.answer(
+                "⚠️ <b>Некорректный номер телефона!</b>\n"
+                "Пожалуйста, введите номер в формате: <code>+79991234567</code> или нажмите кнопку ниже.",
+                parse_mode="HTML",
+                reply_markup=kb.get_phone_keyboard()
+            )
+            return
+        phone = raw_phone
 
     await state.update_data(phone=phone)
     await state.set_state(Form.comment)
@@ -180,11 +187,11 @@ async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
     comment = message.text
     client_id = message.from_user.id
     
-    # 1. Сохраняем в локальную БД SQLite
     db.add_request(client_id, name, phone, comment)
 
-    # 2. Автоматическая выгрузка в Google Таблицу
+    # Выгрузка в Google Таблицу (с явным указанием action)
     await send_to_google_sheet({
+        "action": "add_request",
         "name": name,
         "phone": phone,
         "comment": comment,
@@ -200,7 +207,6 @@ async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
         reply_markup=kb.get_main_keyboard(is_admin=is_admin)
     )
 
-    # 3. Мгновенное уведомление администратору
     if ADMIN_ID:
         try:
             username = f"@{message.from_user.username}" if message.from_user.username else "нет username"
@@ -223,7 +229,7 @@ async def process_comment(message: types.Message, state: FSMContext, bot: Bot):
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
 
-# --- ОБРАБОТКА СТАТУСОВ И УВЕДОМЛЕНИЕ КЛИЕНТА ---
+# --- ИЗМЕНЕНИЕ СТАТУСА (И В GOOGLE ТАБЛИЦЕ) ---
 
 @router.callback_query(F.data.startswith("status_"))
 async def process_status_change(callback: types.CallbackQuery, bot: Bot):
@@ -237,24 +243,33 @@ async def process_status_change(callback: types.CallbackQuery, bot: Bot):
 
     if action_type == "work":
         status_text = "взята в работу ✅"
+        google_status = "🟡 В работе"
         user_notify_text = "🟡 <b>Обновление по вашей заявке:</b>\nВаша заявка взята в работу! Менеджер уже занимается вашим вопросом."
     else:
         status_text = "отклонена ❌"
+        google_status = "🔴 Отклонена"
         user_notify_text = "🔴 <b>Обновление по вашей заявке:</b>\nК сожалению, ваша заявка отклонена. Если у вас возникли вопросы, вы можете связаться с нами через контакты."
 
+    # Изменяем текст у админа
     await callback.message.edit_text(
         f"{callback.message.text}\n\n📌 <b>Статус:</b> Заявка {status_text}",
         parse_mode="HTML"
     )
     await callback.answer(f"Заявка {status_text}")
 
+    # Обновляем статус в Google Таблице
     if target_user_id:
+        await send_to_google_sheet({
+            "action": "update_status",
+            "user_id": target_user_id,
+            "new_status": google_status
+        })
         try:
             await bot.send_message(chat_id=target_user_id, text=user_notify_text, parse_mode="HTML")
         except Exception as e:
             print(f"Не удалось отправить уведомление пользователю {target_user_id}: {e}")
 
-# --- МОДУЛЬ РАССЫЛКИ (ПО КНОПКЕ "📢 Сделать рассылку") ---
+# --- РАССЫЛКА ---
 
 @router.message(Command("broadcast"))
 @router.message(F.text == "📢 Сделать рассылку")
@@ -310,7 +325,7 @@ async def execute_broadcast(callback: types.CallbackQuery, state: FSMContext, bo
 
     asyncio.create_task(run_broadcast_task(bot, text_to_send, callback.from_user.id))
 
-# --- АДМИН-ПАНЕЛЬ ---
+# --- АДМИН-ПАНЕЛЬ И ЭКСПОРТ БАЗЫ ---
 
 @router.message(Command("admin"))
 @router.message(F.text == "⚙️ Админ-панель")
@@ -321,8 +336,13 @@ async def admin_panel(message: types.Message, state: FSMContext):
         return
 
     requests = db.get_all_requests(limit=10)
+    
+    export_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Скачать базу клиентов (.xlsx)", callback_data="export_users")]
+    ])
+
     if not requests:
-        await message.answer("📭 Заявок пока нет.")
+        await message.answer("📭 Заявок пока нет.", reply_markup=export_kb)
         return
 
     text = "📋 <b>Последние 10 заявок:</b>\n\n"
@@ -335,4 +355,32 @@ async def admin_panel(message: types.Message, state: FSMContext):
             f"-------------------------------\n"
         )
 
-    await message.answer(text, parse_mode="HTML")
+    await message.answer(text, parse_mode="HTML", reply_markup=export_kb)
+
+@router.callback_query(F.data == "export_users")
+async def export_users_excel(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("У вас нет доступа.", show_alert=True)
+        return
+
+    users = db.get_all_users_full()
+    if not users:
+        await callback.answer("База клиентов пуста.", show_alert=True)
+        return
+
+    # Создаем DataFrame и сохраняем в Excel
+    df = pd.DataFrame(users, columns=["User ID", "Username", "Имя"])
+    file_path = "users_export.xlsx"
+    df.to_excel(file_path, index=False)
+
+    # Отправляем файл админу
+    await callback.message.answer_document(
+        document=FSInputFile(file_path),
+        caption="📊 <b>Экспорт базы пользователей бота</b>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+    # Удаляем временный файл
+    if os.path.exists(file_path):
+        os.remove(file_path)

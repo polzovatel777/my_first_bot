@@ -51,10 +51,23 @@ def get_all_users():
     finally:
         conn.close()
 
+def get_all_users_full():
+    """Возвращает полную информацию о пользователях для выгрузки в Excel."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT user_id, username, first_name FROM users")
+        rows = cursor.fetchall()
+        return rows
+    except sqlite3.Error as e:
+        print(f"Ошибка чтения данных пользователей: {e}")
+        return []
+    finally:
+        conn.close()
+
 def add_request(user_id: int, name: str, phone: str, comment: str):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    # Исправлено: добавлены все 4 знака вопроса (?, ?, ?, ?)
     cursor.execute(
         "INSERT INTO requests (user_id, name, phone, comment) VALUES (?, ?, ?, ?)",
         (user_id, name, phone, comment)
