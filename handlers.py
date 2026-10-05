@@ -5,6 +5,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 import keyboards as kb
 import database as db
 
@@ -34,6 +35,64 @@ async def send_to_google_sheet(data: dict):
             await session.post(GOOGLE_SHEET_URL, json=data)
     except Exception as e:
         print(f"Ошибка отправки в Google Таблицу: {e}")
+
+# --- ФОНОВАЯ ЗАДАЧА РАССЫЛКИ ---
+
+async def run_broadcast_task(bot: Bot, text_to_send: str, admin_id: int):
+    """Выполняется в фоновом режиме, не блокируя основной поток бота"""
+    try:
+        users = db.get_all_users()
+    except Exception as e:
+        await bot.send_message(
+            chat_id=admin_id,
+            text=f"❌ <b>Ошибка базы данных при рассылке:</b> {e}",
+            parse_mode="HTML"
+        )
+        return
+
+    if not users:
+        await bot.send_message(
+            chat_id=admin_id,
+            text="⚠️ <b>Список пользователей пуст.</b> Рассылка не выполнена.",
+            parse_mode="HTML",
+            reply_markup=kb.get_main_keyboard(is_admin=True)
+        )
+        return
+
+    success_count = 0
+    failed_count = 0
+
+    for user in users:
+        user_id = user[0]
+        try:
+            await bot.send_message(chat_id=user_id, text=text_to_send, parse_mode="HTML")
+            success_count += 1
+            await asyncio.sleep(0.05)  # Защита от Flood limits
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(e.retry_after)
+            try:
+                await bot.send_message(chat_id=user_id, text=text_to_send, parse_mode="HTML")
+                success_count += 1
+            except Exception:
+                failed_count += 1
+        except TelegramForbiddenError:
+            failed_count += 1
+        except Exception as e:
+            print(f"Ошибка отправки пользователю {user_id}: {e}")
+            failed_count += 1
+
+    await bot.send_message(
+        chat_id=admin_id,
+        text=(
+            f"🎉 <b>РАССЫЛКА ЗАВЕРШЕНА!</b>\n\n"
+            f"📨 Успешно доставлено: <b>{success_count}</b>\n"
+            f"🚫 Ошибок (заблокировали бота/удалены): <b>{failed_count}</b>"
+        ),
+        parse_mode="HTML",
+        reply_markup=kb.get_main_keyboard(is_admin=True)
+    )
+
+# --- КОМАНДЫ И ОБРАБОТЧИКИ ---
 
 @router.message(CommandStart())
 async def cmd_start(message: types.Message):
@@ -215,38 +274,12 @@ async def execute_broadcast(callback: types.CallbackQuery, state: FSMContext, bo
     text_to_send = data.get("broadcast_text")
     await state.clear()
 
-    # Меняем текст на статус загрузки
-    status_msg = await callback.message.edit_text("⏳ <b>Начинаю рассылку...</b>", parse_mode="HTML")
-
-    users = db.get_all_users()
-    success_count = 0
-    failed_count = 0
-
-    if users:
-        for user in users:
-            user_id = user[0]
-            try:
-                await bot.send_message(chat_id=user_id, text=text_to_send, parse_mode="HTML")
-                success_count += 1
-                await asyncio.sleep(0.05)  # Защита от спам-лимитов
-            except Exception as e:
-                print(f"Ошибка отправки пользователю {user_id}: {e}")
-                failed_count += 1
-
-    is_admin = (callback.from_user.id == ADMIN_ID)
-    
-    # Отправляем отдельное итоговое сообщение
-    await bot.send_message(
-        chat_id=ADMIN_ID,
-        text=(
-            f"🎉 <b>РАССЫЛКА ЗАВЕРШЕНА!</b>\n\n"
-            f"📨 Успешно доставлено: <b>{success_count}</b>\n"
-            f"🚫 Ошибок (заблокировали бота): <b>{failed_count}</b>"
-        ),
-        parse_mode="HTML",
-        reply_markup=kb.get_main_keyboard(is_admin=is_admin)
-    )
+    # Изменяем сообщение на «Начинаю рассылку...»
+    await callback.message.edit_text("⏳ <b>Начинаю рассылку...</b>", parse_mode="HTML")
     await callback.answer()
+
+    # Запускаем фоновую задачу для отправки
+    asyncio.create_task(run_broadcast_task(bot, text_to_send, callback.from_user.id))
 
 # --- ИНФОРМАЦИЯ И АДМИНКА ---
 

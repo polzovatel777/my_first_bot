@@ -37,11 +37,25 @@ def add_user(user_id: int, username: str, first_name: str):
     conn.commit()
     conn.close()
 
+def get_all_users():
+    """Возвращает список кортежей [(user_id,), ...] всех пользователей из базы данных."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT user_id FROM users")
+        rows = cursor.fetchall()
+        return rows
+    except sqlite3.Error as e:
+        print(f"Ошибка чтения пользователей из БД: {e}")
+        return []
+    finally:
+        conn.close()
+
 def add_request(user_id: int, name: str, phone: str, comment: str):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO requests (user_id, name, phone, comment) VALUES (?, ?, ?, ?)",
+        "INSERT INTO requests (user_id, name, phone, comment) VALUES (?, ?, ?)",
         (user_id, name, phone, comment)
     )
     conn.commit()
