@@ -1,3 +1,4 @@
+import asyncio
 import aiohttp
 from aiogram import Router, types, F, Bot
 from aiogram.filters import CommandStart, Command
@@ -12,7 +13,7 @@ router = Router()
 # 🔴 Твой Telegram USER_ID
 ADMIN_ID = 818535227
 
-# 🟢 Твоя ссылка на Google Apps Script для выгрузки в Google Таблицу
+# 🟢 Ссылка на Google Apps Script
 GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbzQLDGNCvFKvOeYzpW9ZgZx_GpVxdnwPnjXOyXpCOHxP1vFWkJxve1A2OHfTsORGokYlw/exec"
 
 class Form(StatesGroup):
@@ -151,30 +152,33 @@ async def process_status_change(callback: types.CallbackQuery, bot: Bot):
         status_text = "отклонена ❌"
         user_notify_text = "🔴 <b>Обновление по вашей заявке:</b>\nК сожалению, ваша заявка отклонена. Если у вас возникли вопросы, вы можете связаться с нами через контакты."
 
-    # Обновляем текст сообщения админа
     await callback.message.edit_text(
         f"{callback.message.text}\n\n📌 <b>Статус:</b> Заявка {status_text}",
         parse_mode="HTML"
     )
     await callback.answer(f"Заявка {status_text}")
 
-    # Уведомляем клиента
     if target_user_id:
         try:
             await bot.send_message(chat_id=target_user_id, text=user_notify_text, parse_mode="HTML")
         except Exception as e:
             print(f"Не удалось отправить уведомление пользователю {target_user_id}: {e}")
 
-# --- МОДУЛЬ РАССЫЛКИ (BROADCAST) ---
+# --- МОДУЛЬ РАССЫЛКИ (ПО КНОПКЕ "📢 Сделать рассылку") ---
 
 @router.message(Command("broadcast"))
+@router.message(F.text.contains("Сделать рассылку"))
 async def start_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("⛔ У вас нет доступа к этой команде.")
+        await message.answer("⛔ У вас нет доступа к этой функции.")
         return
 
     await state.set_state(BroadcastForm.text)
-    await message.answer("📢 <b>Введите текст для рассылки всем пользователям:</b>", parse_mode="HTML", reply_markup=kb.get_cancel_keyboard())
+    await message.answer(
+        "📢 <b>Введите текст для рассылки всем пользователям:</b>",
+        parse_mode="HTML",
+        reply_markup=kb.get_cancel_keyboard()
+    )
 
 @router.message(BroadcastForm.text)
 async def process_broadcast_text(message: types.Message, state: FSMContext):
@@ -201,7 +205,9 @@ async def execute_broadcast(callback: types.CallbackQuery, state: FSMContext, bo
 
     if callback.data == "cancel_broadcast":
         await state.clear()
+        is_admin = (callback.from_user.id == ADMIN_ID)
         await callback.message.edit_text("❌ Рассылка отменена.")
+        await callback.message.answer("Главное меню:", reply_markup=kb.get_main_keyboard(is_admin=is_admin))
         await callback.answer()
         return
 
@@ -209,33 +215,41 @@ async def execute_broadcast(callback: types.CallbackQuery, state: FSMContext, bo
     text_to_send = data.get("broadcast_text")
     await state.clear()
 
-    await callback.message.edit_text("⏳ <b>Начинаю рассылку...</b>", parse_mode="HTML")
+    # Меняем текст на статус загрузки
+    status_msg = await callback.message.edit_text("⏳ <b>Начинаю рассылку...</b>", parse_mode="HTML")
 
     users = db.get_all_users()
     success_count = 0
     failed_count = 0
 
-    for user in users:
-        user_id = user[0]
-        try:
-            await bot.send_message(chat_id=user_id, text=text_to_send, parse_mode="HTML")
-            success_count += 1
-        except Exception as e:
-            print(f"Ошибка рассылки пользователю {user_id}: {e}")
-            failed_count += 1
+    if users:
+        for user in users:
+            user_id = user[0]
+            try:
+                await bot.send_message(chat_id=user_id, text=text_to_send, parse_mode="HTML")
+                success_count += 1
+                await asyncio.sleep(0.05)  # Защита от спам-лимитов
+            except Exception as e:
+                print(f"Ошибка отправки пользователю {user_id}: {e}")
+                failed_count += 1
 
-    # Редактируем то же самое сообщение, подтверждая завершение
-    await callback.message.edit_text(
-        f"🎉 <b>РАССЫЛКА ЗАВЕРШЕНА!</b>\n\n"
-        f"📨 Успешно доставлено: <b>{success_count}</b>\n"
-        f"🚫 Ошибок (заблокировали бота): <b>{failed_count}</b>",
-        parse_mode="HTML"
+    is_admin = (callback.from_user.id == ADMIN_ID)
+    
+    # Отправляем отдельное итоговое сообщение
+    await bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            f"🎉 <b>РАССЫЛКА ЗАВЕРШЕНА!</b>\n\n"
+            f"📨 Успешно доставлено: <b>{success_count}</b>\n"
+            f"🚫 Ошибок (заблокировали бота): <b>{failed_count}</b>"
+        ),
+        parse_mode="HTML",
+        reply_markup=kb.get_main_keyboard(is_admin=is_admin)
     )
     await callback.answer()
 
 # --- ИНФОРМАЦИЯ И АДМИНКА ---
 
-# Фильтры поиска текста кнопки с любыми видами иконок
 @router.message(F.text.contains("О компании"))
 async def info_handler(message: types.Message):
     await message.answer(
