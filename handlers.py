@@ -107,8 +107,10 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     await message.answer(
         f"Здравствуйте, <b>{message.from_user.first_name}</b>! 👋\n\n"
-        f"Добро пожаловать. Мы принимаем и обрабатываем ваши заявки 24/7.\n"
-        f"Выберите нужное действие в меню ниже:",
+        f"Это <b>демо-бот системы автоматизации продаж</b> и приема заявок 24/7.\n\n"
+        f"💡 <b>Как это работает:</b>\n"
+        f"Вы можете протестировать отправку заявки через кнопку ниже. Данные мгновенно попадут в Google Таблицу и админ-панель!\n\n"
+        f"👇 <b>Выберите действие в меню:</b>",
         parse_mode="HTML",
         reply_markup=kb.get_main_keyboard(is_admin=is_admin)
     )
@@ -117,9 +119,18 @@ async def cmd_start(message: types.Message, state: FSMContext):
 async def info_handler(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "🏢 <b>О компании</b>\n\n"
-        "Мы создаем технологичные решения для автоматизации бизнеса 24/7.\n"
-        "Ваши заявки мгновенно попадают к специалистам и в реестр Google Таблиц.",
+        "🏢 <b>Автоматизация продаж & TG-боты под ключ</b>\n\n"
+        "Вы теряете до 30% клиентов, если заявки обрабатываются вручную или «на бумажке». "
+        "Эта система превращает Telegram в автономный отдел продаж 24/7.\n\n"
+        "🔥 <b>Что умеет эта система:</b>\n"
+        "• <b>Мгновенный учет:</b> Лиды за 1 секунду улетают в Google Таблицы (бесплатная CRM).\n"
+        "• <b>Управление в 1 клик:</b> Меняйте статус заявки прямо в Telegram — клиенту уйдет уведомление, а в таблице обновятся данные.\n"
+        "• <b>Защита от спама и ошибок:</b> Умная проверка номеров телефонов и данных. Никакого мусора в базе.\n"
+        "• <b>Выгрузка базы:</b> Формирование Excel-файлов с контактами клиентов в любой момент.\n\n"
+        "🎯 <b>Адаптация под любую нишу:</b>\n"
+        "Услуги, e-commerce, автосервисы, салоны, недвижимость, онлайн-школы, общепит.\n\n"
+        "💡 <b>Хотите внедрить такую систему и не терять ни одной заявки?</b>\n"
+        "Напишите мне для бесплатного разбора вашей ниши: @il_overdrive",
         parse_mode="HTML"
     )
 
@@ -163,7 +174,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     
     if message.text in menu_buttons:
         await state.clear()
-        if message.text in ["ℹ️ О компании", "🏢 О компании"]:
+        if message.text in ["ℹ️️ О компании", "🏢 О компании"]:
             await info_handler(message, state)
         elif message.text in ["📞 Контакты", "💎 Контакты"]:
             await contacts_handler(message, state)
